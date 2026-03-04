@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Card Gallery</title>
+  <!-- Prefetch loading icon so it's cached when index.html's loading screen appears -->
+  <link rel="prefetch" href="./files/160icon.webp" as="image" type="image/webp">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    /* ── Background image ── */
+    .bg-layer {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;        /* fill viewport, scale by whichever axis is larger */
+      object-position: top center;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* ── Title layer ── */
+    .title-layer {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      /* padding-top: 5vh; */
+      pointer-events: none;
+      mix-blend-mode: screen;
+    }
+
+    .title-layer img {
+      width: 70vw;
+      height: auto;
+      display: block;
+    }
+
+    .title-layer .subtitle {
+      margin-top: -5vh;
+      font-family: 'PingFang SC', 'SF Pro SC', 'SF Pro Display', -apple-system, sans-serif;
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.85);
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    /* ── Breathing glow ── */
+    .glow {
+      position: fixed;
+      top: 45%; left: 50%;
+      width: 45vmin; height: 45vmin;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(0,190,80,0.55) 0%, rgba(0,140,60,0.2) 40%, transparent 70%);
+      transform: translate(-50%, -50%) scale(1);
+      filter: blur(50px);
+      pointer-events: none;
+      animation: breathe 5s ease-in-out infinite;
+      z-index: 2;
+    }
+
+    @keyframes breathe {
+      0%, 100% { transform: translate(-50%, -50%) scale(1);   filter: blur(50px); opacity: 0.6; }
+      50%      { transform: translate(-50%, -50%) scale(1.45); filter: blur(80px); opacity: 1;   }
+    }
+
+    /* ── Gallery container ── */
+    #gallery {
+      position: relative;
+      width: 100%; height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding-bottom: 0vh;
+      z-index: 3;
+    }
+
+    .card-stack {
+      --card-w: min(68vw, calc(70vh * 3 / 4));
+      --card-r: calc(var(--card-w) * 0.075);
+      position: relative;
+      width: var(--card-w);
+      aspect-ratio: 3 / 4;
+      perspective: 1000px;
+    }
+
+    .stack-card {
+      position: absolute;
+      inset: 0;
+      border-radius: var(--card-r);
+      border: 2px solid rgba(255,255,255,0.25);
+      overflow: hidden;
+      will-change: transform, opacity;
+      cursor: pointer;
+      transform-origin: 50% 100%;
+    }
+
+    .stack-card img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      pointer-events: none;
+      transition: opacity 350ms ease;
+    }
+
+    .stack-card .card-front { opacity: 0; }
+    .stack-card .card-back  { opacity: 1; }
+
+    .stack-card[data-pos="0"] .card-front { opacity: 1; }
+    .stack-card[data-pos="0"] .card-back  { opacity: 0; }
+
+    .stack-card.card-revealed[data-card-id="1"] {
+      box-shadow: 0 0 80px 2px rgba(211, 255, 80, 0.313);
+    }
+    .stack-card.card-revealed[data-card-id="2"] {
+      box-shadow: 0 0 80px 2px rgba(255, 223, 18, 0.45);
+    }
+    .stack-card.card-revealed[data-card-id="3"] {
+      box-shadow: 0 0 80px 2px rgba(253, 75, 75, 0.45);
+    }
+    .stack-card.card-revealed[data-card-id="4"] {
+      box-shadow: 0 0 80px 2px rgba(253, 140, 75, 0.45);
+    }
+    .stack-card:not([data-pos="0"]) {
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    }
+  </style>
+</head>
+<body>
+  <img class="bg-layer" src="./files/BG.webp" alt="Background">
+  <div class="title-layer">
+    <img src="./files/title.webp" alt="Title">
+    <p class="subtitle">选一张魔法卡片，<br>轻触开启与主播的四季之旅～</p>
+  </div>
+  <div class="glow"></div>
+  <div id="gallery">
+    <div class="card-stack" id="card-stack"></div>
+  </div>
+  <script src="gallery.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+# SSL certificates - do not commit
+cert.pem
+key.pem
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/
