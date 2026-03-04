@@ -906,7 +906,7 @@ backBtn.addEventListener('click', () => {
   if (isFullscreen) {
     exitFullscreen();
   } else if (_fromGallery) {
-    window.location.href = 'gallery.html';
+    window.location.href = 'index.html';
   }
 });
 

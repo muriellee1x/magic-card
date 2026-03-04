@@ -5,543 +5,156 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>3DGS Card Viewer</title>
-  <link rel="preload" as="image" href="./files/160icon.webp" type="image/webp">
+  <title>Card Gallery</title>
+  <!-- Prefetch loading icon so it's cached when index.html's loading screen appears -->
+  <link rel="prefetch" href="./files/160icon.webp" as="image" type="image/webp">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
     html, body {
       width: 100%; height: 100%;
       overflow: hidden;
-      background: rgb(4, 5, 20);
+      background: #000;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
       touch-action: none;
       -webkit-user-select: none;
       user-select: none;
     }
 
-    /* ── Per-card page background ── */
-    #page-bg {
+    /* ── Background image ── */
+    .bg-layer {
       position: fixed;
       inset: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;        /* fill viewport, scale by whichever axis is larger */
       object-position: top center;
-      display: block;
-      pointer-events: none;
       z-index: 0;
-      opacity: 0;
-      transition: opacity 0.7s ease;
-    }
-    #page-bg.visible {
-      opacity: 1;
+      pointer-events: none;
     }
 
-    #app {
-      width: 100%; height: 100%;
+    /* ── Title layer ── */
+    .title-layer {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 1;
       display: flex;
       flex-direction: column;
       align-items: center;
+      /* padding-top: 5vh; */
+      pointer-events: none;
+      mix-blend-mode: screen;
+    }
+
+    .title-layer img {
+      width: 70vw;
+      height: auto;
+      display: block;
+    }
+
+    .title-layer .subtitle {
+      margin-top: -5vh;
+      font-family: 'PingFang SC', 'SF Pro SC', 'SF Pro Display', -apple-system, sans-serif;
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.85);
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    /* ── Breathing glow ── */
+    .glow {
+      position: fixed;
+      top: 45%; left: 50%;
+      width: 45vmin; height: 45vmin;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(0,190,80,0.55) 0%, rgba(0,140,60,0.2) 40%, transparent 70%);
+      transform: translate(-50%, -50%) scale(1);
+      filter: blur(50px);
+      pointer-events: none;
+      animation: breathe 5s ease-in-out infinite;
+      z-index: 2;
+    }
+
+    @keyframes breathe {
+      0%, 100% { transform: translate(-50%, -50%) scale(1);   filter: blur(50px); opacity: 0.6; }
+      50%      { transform: translate(-50%, -50%) scale(1.45); filter: blur(80px); opacity: 1;   }
+    }
+
+    /* ── Gallery container ── */
+    #gallery {
+      position: relative;
+      width: 100%; height: 100%;
+      display: flex;
+      align-items: center;
       justify-content: center;
-      gap: 20px;
-      padding-bottom: 6vh;
-      /* Perspective on parent so children's rotateX/Y have depth */
+      padding-bottom: 0vh;
+      z-index: 3;
+    }
+
+    .card-stack {
+      --card-w: min(68vw, calc(70vh * 3 / 4));
+      --card-r: calc(var(--card-w) * 0.075);
+      position: relative;
+      width: var(--card-w);
+      aspect-ratio: 3 / 4;
       perspective: 1000px;
     }
 
-    /* Wrapper that receives the whole-card CSS 3D tilt transform */
-    #card-wrapper {
-      --card-w: min(80vw, calc(90vh * 3 / 4));
-      --card-r: calc(var(--card-w) * 0.075); /* 圆角 = 卡片宽度 × 7.5%，与 frame 图片等比 */
-
-      /* ── Character CSS anchor (used by #card-character*) ── */
-      --char-cx: 62%;
-      --char-cy: 50%;
-      --char-w:  60%;
-      --char-h:  60%;
-
-      /* ── Character top-left corner in absolute px ──
-       *   card aspect-ratio = 3:4  →  card-h = card-w × 4/3
-       *   char left-edge = (62% − 30%) × card-w = 32% × card-w
-       *   char top-edge  = (50% − 30%) × card-h = 20% × card-h
-       */
-      --card-h:        calc(var(--card-w) * 4 / 3);
-      --char-left-px:  calc(var(--card-w) * 0.32);
-      --char-top-px:   calc(var(--card-h) * 0.20);
-
-      width: var(--card-w);
-      aspect-ratio: 3 / 4;
-      position: relative;
-      will-change: transform;
-      isolation: isolate; /* keep blend modes inside the card stack */
-      transform-style: preserve-3d;
-    }
-
-    /* ── Layer 1 (innermost): Gaussian splat scene — anchored at z = 0 ── */
-    #card {
+    .stack-card {
       position: absolute;
       inset: 0;
       border-radius: var(--card-r);
+      border: 2px solid rgba(255,255,255,0.25);
       overflow: hidden;
-      background: #ffffff;
-      transform: translateZ(0);
+      will-change: transform, opacity;
+      cursor: pointer;
+      transform-origin: 50% 100%;
     }
 
-    #card canvas {
-      display: block;
-      width: 100% !important;
-      height: 100% !important;
-      touch-action: none;
-      pointer-events: none;
-    }
-
-    /* ── Full-screen loading screen — opaque cover until card is ready ── */
-    #loading-screen {
-      position: fixed;
-      inset: 0;
-      background: rgb(4, 5, 20);
-      --loading-icon-size: 120px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 14px;
-      z-index: 200;
-      pointer-events: none;
-      transition: opacity 0.7s ease;
-    }
-    #loading-screen.hidden {
-      opacity: 0;
-    }
-
-    /* Loading animation (animated WebP) */
-    #loading-icon {
-      /* 调整这里即可控制 icon 尺寸 */
-      width: var(--loading-icon-size, clamp(72px, 18vw, 120px));
-      height: auto;
-      display: block;
-      opacity: 0.9;
-      /* keep crisp edges if it has pixel art details */
-      image-rendering: auto;
-    }
-    #loading-text {
-      font-size: 12px;
-      line-height: 1.4;
-      color: rgba(255, 255, 255, 0.7);
-      letter-spacing: 0.02em;
-      text-align: center;
-      font-family: "PingFang SC", "PingFang TC", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-      user-select: none;
-      -webkit-user-select: none;
-      animation: loading-breathe 2.5s ease-in-out infinite;
-    }
-    @keyframes loading-breathe {
-      0%, 100% { opacity: 0; }
-      25%      { opacity: 0.75; }
-      50%      { opacity: 1; }
-    }
-
-    /* ── Scene-loading toast (fixed, above everything) ── */
-    #scene-toast {
-      position: fixed;
-      top: calc(36px + env(safe-area-inset-top, 0px));
-      left: 50%;
-      transform: translateX(-50%) translateY(-6px);
-      background: rgba(4, 5, 20, 0.88);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 14px;
-      padding: 10px 20px;
-      color: rgba(255, 255, 255, 0.88);
-      font-size: 13px;
-      font-family: "PingFang SC", "PingFang TC", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-      letter-spacing: 0.04em;
-      white-space: nowrap;
-      pointer-events: none;
-      z-index: 500;
-      opacity: 1;
-      transition: opacity 0.3s ease, transform 0.3s ease;
-    }
-    #scene-toast.hidden {
-      opacity: 0;
-      transform: translateX(-50%) translateY(-10px);
-    }
-
-    /* Error overlay lives inside #card */
-    #overlay {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: rgba(255, 255, 255, 0.4);
-      font-size: 13px;
-      letter-spacing: 0.02em;
-      z-index: 10;
-      transition: opacity 0.4s ease;
-    }
-    #overlay.hidden {
-      opacity: 0;
-      pointer-events: none;
-    }
-
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* ── Layer 3: card frame PNG — slightly raised above the splat background ── */
-    #card-frame {
+    .stack-card img {
       position: absolute;
       inset: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;
-      pointer-events: none;
       display: block;
-      transform: translateZ(4px);
-    }
-
-    /* ── Layer 2: card effect — between scene and frame
-         blend-mode set by JS: normal (cards 1 & 3, alpha-channel) / screen (cards 2 & 4) ── */
-    #card-effect {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
       pointer-events: none;
-      display: block;
-      border-radius: var(--card-r);
-      mix-blend-mode: screen;
-      transform: translateZ(2px);
-      transition: opacity 180ms ease;
+      transition: opacity 350ms ease;
     }
 
-    /* ── Fullscreen scene effect overlay ── */
-    #scene-effect {
-      position: fixed;
-      inset: 0;
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover;
-      pointer-events: none;
-      display: none;
-      mix-blend-mode: screen;
-      z-index: 60; /* above #scene-overlay (50), below #back-btn (300) */
-    }
-    body.scene-fullscreen #scene-effect {
-      display: block;
-    }
+    .stack-card .card-front { opacity: 0; }
+    .stack-card .card-back  { opacity: 1; }
 
-    /* ── Layer 4: character PNG — floats visibly in front of the card ── */
-    #card-character,
-    #card-character-canvas {
-      position: absolute;
-      width: var(--char-w);
-      height: var(--char-h);
-      top: var(--char-cy);
-      left: var(--char-cx);
-      object-fit: contain;
-      pointer-events: none;
-      display: block;
-      opacity: 1;
-      transform: translateZ(150px) translate(-50%, -50%);
-    }
-    #card-character-canvas {
-      display: none;
-    }
+    .stack-card[data-pos="0"] .card-front { opacity: 1; }
+    .stack-card[data-pos="0"] .card-back  { opacity: 0; }
 
-    /* ── Scene fullscreen overlay ── */
-    #scene-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      background: rgb(4, 5, 20);
-      opacity: 0;
-      pointer-events: none;
-      transform: scale(0.96);
-      transform-origin: center;
-      transition: opacity 0.45s ease, transform 0.45s ease;
+    .stack-card.card-revealed[data-card-id="1"] {
+      box-shadow: 0 0 80px 2px rgba(211, 255, 80, 0.313);
     }
-    #scene-overlay.active {
-      opacity: 1;
-      pointer-events: auto;
-      transform: scale(1.0);
+    .stack-card.card-revealed[data-card-id="2"] {
+      box-shadow: 0 0 80px 2px rgba(255, 223, 18, 0.45);
     }
-    #scene-wrap {
-      width: 100%;
-      height: 100%;
+    .stack-card.card-revealed[data-card-id="3"] {
+      box-shadow: 0 0 80px 2px rgba(253, 75, 75, 0.45);
     }
-    #scene-wrap canvas {
-      display: block;
-      width: 100% !important;
-      height: 100% !important;
-      touch-action: none;
-      pointer-events: none;
+    .stack-card.card-revealed[data-card-id="4"] {
+      box-shadow: 0 0 80px 2px rgba(253, 140, 75, 0.45);
     }
-    /* Hide toolbar when scene overlay is active */
-    body.scene-fullscreen .toolbar {
-      display: none;
-    }
-
-    /* ── Back button (top-left, shown only in fullscreen) ── */
-    #back-btn {
-      position: fixed;
-      top: calc(20px + env(safe-area-inset-top, 0px));
-      left: 20px;
-      width: 44px; height: 44px;
-      border-radius: 22px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      background: rgba(255, 255, 255, 0.08);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      z-index: 300;
-      padding: 0;
-      outline: none;
-      transition: background 0.15s ease;
-    }
-    #back-btn:active { background: rgba(255, 255, 255, 0.18); }
-    #back-btn svg { width: 20px; height: 20px; }
-    #back-btn path { fill: rgba(255, 255, 255, 0.7); }
-
-    /* ── Right-side toolbar ── */
-    .toolbar {
-      position: fixed;
-      bottom: calc(28px + env(safe-area-inset-bottom, 0px));
-      right: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      z-index: 100;
-    }
-
-    .btn {
-      width: 44px; height: 44px;
-      border-radius: 22px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      background: rgba(255, 255, 255, 0.08);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      padding: 0;
-      outline: none;
-    }
-    .btn:active { background: rgba(255, 255, 255, 0.18); }
-    .btn.active {
-      background: rgba(255, 255, 255, 0.22);
-      border-color: rgba(255, 255, 255, 0.3);
-    }
-    .btn svg { width: 20px; height: 20px; }
-    .btn path { fill: rgba(255, 255, 255, 0.7); }
-    .btn.active path { fill: rgba(255, 255, 255, 0.95); }
-
-    /* ── Layer menu panel ── */
-    #layer-menu {
-      position: fixed;
-      bottom: calc(28px + env(safe-area-inset-bottom, 0px));
-      right: calc(20px + 44px + 10px);
-      background: rgba(4, 5, 20, 1);
-      backdrop-filter: blur(24px);
-      -webkit-backdrop-filter: blur(24px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 14px;
-      padding: 6px 0;
-      z-index: 99;
-      min-width: 148px;
-      transform-origin: bottom right;
-      transition: opacity 0.15s ease, transform 0.15s ease;
-    }
-    #layer-menu.hidden {
-      opacity: 0;
-      pointer-events: none;
-      transform: scale(0.92) translateX(6px);
-    }
-    .layer-item {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 11px 16px;
-      cursor: pointer;
-      color: rgba(255, 255, 255, 0.82);
-      font-size: 13px;
-      letter-spacing: 0.02em;
-      user-select: none;
-    }
-    .layer-item:hover { background: rgba(255, 255, 255, 0.06); }
-    .layer-item:first-child { border-radius: 14px 14px 0 0; }
-    .layer-item:last-child  { border-radius: 0 0 14px 14px; }
-    .layer-item + .layer-item { border-top: 1px solid rgba(255,255,255,0.06); }
-
-    /* ── Chat bubble (tap character to toggle) ── */
-    #chat-bubble {
-      position: absolute;
-      /*
-       * Right-aligned bubble: right edge anchored 12 px left of character's left edge.
-       * right = card-w − char-left-px + 12px
-       * Bubble grows leftward from this anchor; text-align: right pushes content
-       * against that right edge, reading naturally toward the character.
-       */
-      right: calc(var(--card-w) - var(--char-left-px) - 48px);
-      top:   calc(var(--char-top-px) + 20px);
-      background:rgba(255, 255, 255, 1);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border-radius: 12px;
-      padding: 8px 14px;
-      color: rgb(23, 25, 51, 1);
-      font-size: 13px;
-      font-family: "PingFang SC", "PingFang TC", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-      pointer-events: none;
-      max-width: 62%;
-      line-height: 1.5;
-      letter-spacing: 0.02em;
-      transform: translateZ(200px);
-      white-space: nowrap;
-      transition: transform 0.15s ease;
-    }
-    /* bubble tail pointing down-right toward character */
-    #chat-bubble::after {
-      content: '';
-      position: absolute;
-      right: 18px;
-      bottom: -3px;
-      width: 8px;
-      height: 8px;
-      background: rgba(255, 255, 255, 1);
-      transform: rotate(45deg);
-    }
-
-    /* ── Card hint text below the card ── */
-    /* custom checkbox */
-    .layer-item input[type="checkbox"] {
-      appearance: none;
-      -webkit-appearance: none;
-      width: 16px; height: 16px;
-      border-radius: 4px;
-      border: 1.5px solid rgba(255,255,255,0.3);
-      background: transparent;
-      cursor: pointer;
-      flex-shrink: 0;
-      position: relative;
-      transition: background 0.12s, border-color 0.12s;
-    }
-    .layer-item input[type="checkbox"]:checked {
-      background: rgba(255,255,255,0.9);
-      border-color: rgba(255,255,255,0.9);
-    }
-    .layer-item input[type="checkbox"]:checked::after {
-      content: '';
-      position: absolute;
-      left: 3px; top: 1px;
-      width: 5px; height: 8px;
-      border: 2px solid #111;
-      border-top: none;
-      border-left: none;
-      transform: rotate(45deg);
+    .stack-card:not([data-pos="0"]) {
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
     }
   </style>
 </head>
 <body>
-  <!-- Per-card page background (revealed after loading) -->
-  <img id="page-bg" alt="" aria-hidden="true">
-
-  <!-- Scene-loading toast -->
-  <div id="scene-toast" class="hidden">魔法场景加载中，稍等片刻</div>
-
-  <!-- Back button: visible only in scene-fullscreen mode -->
-  <button id="back-btn" aria-label="返回">
-    <svg viewBox="0 0 24 24">
-      <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
-    </svg>
-  </button>
-
-  <!-- Scene fullscreen overlay: separate canvas for the scene PLY -->
-  <div id="scene-overlay">
-    <div id="scene-wrap"></div>
+  <img class="bg-layer" src="./files/BG.webp" alt="Background">
+  <div class="title-layer">
+    <img src="./files/title.webp" alt="Title">
+    <p class="subtitle">选一张魔法卡片，<br>轻触开启与主播的四季之旅～</p>
   </div>
-
-  <!-- Fullscreen effect overlay (screen blend) -->
-  <img id="scene-effect" alt="">
-
-  <!-- Full-screen loading animation (outside card, always on top) -->
-  <div id="loading-screen">
-    <img
-      id="loading-icon"
-      src="./files/160icon.webp"
-      width="160"
-      height="160"
-      alt="Loading"
-      decoding="async"
-      fetchpriority="high"
-    >
-    <div id="loading-text">魔法加载中…</div>
+  <div class="glow"></div>
+  <div id="gallery">
+    <div class="card-stack" id="card-stack"></div>
   </div>
-
-  <div id="app">
-    <div id="card-wrapper">
-
-      <!-- Layer 1 (innermost): Gaussian splat scene -->
-      <div id="card">
-        <!-- Error overlay (hidden during normal load) -->
-        <div id="overlay" class="hidden">
-          <span id="overlay-text"></span>
-        </div>
-      </div>
-
-      <!-- Layer 2: Effect overlay (screen blend) -->
-      <img id="card-effect" alt="">
-
-      <!-- Layer 3: Card frame (bronze border, dark center reveals splat) -->
-      <img id="card-frame" alt="">
-
-      <!-- Layer 4 (outermost): Character — floats above the card with parallax -->
-      <img id="card-character" alt="">
-      <canvas id="card-character-canvas" aria-hidden="true"></canvas>
-
-      <!-- Layer 5: Chat bubble — tap character to cycle through lines -->
-      <div id="chat-bubble">
-        <span id="bubble-text"></span>
-      </div>
-
-    </div>
-  </div>
-
-  <!-- Layer visibility menu -->
-  <div id="layer-menu" class="hidden">
-    <label class="layer-item">
-      <input type="checkbox" id="check-char" checked>
-      <span>Character</span>
-    </label>
-    <label class="layer-item">
-      <input type="checkbox" id="check-frame" checked>
-      <span>Card</span>
-    </label>
-    <label class="layer-item">
-      <input type="checkbox" id="check-scene" checked>
-      <span>Scene</span>
-    </label>
-  </div>
-
-  <div class="toolbar">
-    <button class="btn" id="gyro-btn" style="display:none" aria-label="陀螺仪">
-      <svg viewBox="0 0 24 24">
-        <path d="M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z"/>
-      </svg>
-    </button>
-    <button class="btn" id="menu-btn" aria-label="层级菜单">
-      <svg viewBox="0 0 24 24">
-        <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
-      </svg>
-    </button>
-  </div>
-  <script type="module" src="app.js"></script>
+  <script src="gallery.js"></script>
 </body>
 </html>

@@ -251,6 +251,6 @@ els.forEach(el => {
   el.addEventListener('click', () => {
     if (didSwipe) return;
     if (parseInt(el.dataset.pos) !== 0) return;
-    window.location.href = `index.html?card=${el.dataset.cardId}`;
+    window.location.href = `card-viewer.html?card=${el.dataset.cardId}`;
   });
 });
