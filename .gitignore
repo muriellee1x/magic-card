@@ -7,3 +7,10 @@ key.pem
 
 # Node
 node_modules/
+
+# Python dependencies (local dev only)
+tools/pylib/
+
+# Diagnostic/dev-only pages
+diagnostic.html
+run-diag.html

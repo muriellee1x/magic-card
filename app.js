@@ -1,4 +1,7 @@
-const GS3DReady = import('https://esm.sh/@mkkellogg/gaussian-splats-3d@0.4.2');
+const SparkReady = Promise.all([
+  import('three'),
+  import('@sparkjsdev/spark'),
+]);
 
 // ── Card ID from URL (gallery passes ?card=N) ──
 const _urlParams = new URLSearchParams(window.location.search);
@@ -65,9 +68,9 @@ function advanceBubble() {
   bubbleLineIndex = (bubbleLineIndex + 1) % lines.length;
   bubbleText.textContent = lines[bubbleLineIndex];
   // Micro-bounce: briefly scale down then spring back via CSS transition
-  chatBubble.style.transform = 'translateZ(200px) scale(0.88)';
+  chatBubble.style.transform = 'translateZ(31px) scale(0.88)';
   requestAnimationFrame(() => {
-    chatBubble.style.transform = 'translateZ(200px) scale(1)';
+    chatBubble.style.transform = 'translateZ(31px) scale(1)';
   });
 }
 
@@ -103,7 +106,7 @@ const _effectBlend = (CARD_ID === 1 || CARD_ID === 3) ? 'normal' : 'screen';
 if (cardEffect)  cardEffect.style.mixBlendMode  = _effectBlend;
 if (sceneEffect) sceneEffect.style.mixBlendMode = _effectBlend;
 cardChar.src  = `./files/charactor${CARD_ID}.webp?v=${_v}`;
-if (pageBg) pageBg.src = `./files/card-${CARD_ID}-BG.webp?v=${_v}`;
+if (pageBg) pageBg.style.backgroundImage = `url('./files/BG-card${CARD_ID}-auto.webp?v=${_v}')`;
 // loadingIcon src is set in HTML and preloaded via <link rel="preload">; no override needed.
 
 if (_fromGallery) backBtn.style.display = 'flex';
@@ -249,8 +252,72 @@ if (cardCharCanvas && cardChar) {
 }
 
 // ── Scene file paths (dynamic per card) ──
-const CARD_PLY  = `./files/3D/sharp_charactor${CARD_ID}_b.ksplat`;
-const SCENE_PLY = `./files/3D/sharp_charactor${CARD_ID}_a.ksplat`;
+// .sog = SparkJS pcsogszip format (ZIP of PNG attribute images, ~9-10 MB vs 63 MB PLY)
+const CARD_PLY  = `./files/3D/sharp_charactor${CARD_ID}_b.sog`;
+const SCENE_PLY = `./files/3D/sharp_charactor${CARD_ID}_a.sog`;
+
+// ── Per-card splat position offsets [x, y, z] ──
+// Adjust each card's 3D scene center independently.
+// x: 左右 (正=右), y: 上下 (正=上), z: 前后 (正=离相机近)
+// const CARD_SPLAT_POSITION = {
+//   1: [0, 0.75, 0.5],
+//   2: [-5, 10, 1],
+//   3: [0, 0.5, 0],
+//   4: [0, 0.5, 0],
+// };
+// const SCENE_SPLAT_POSITION = {
+//   1: [-0.5, 1, 0.5],
+//   2: [0, 0.5, 0],
+//   3: [0, 1.55, 1],
+//   4: [-0.85, -1.1, 0.75],
+// };
+const CARD_SPLAT_POSITION = {
+  1: [0, 0, 0],
+  2: [0, 0, 0],
+  3: [0, 0, 0],
+  4: [0, 0, 0],
+};
+const SCENE_SPLAT_POSITION = {
+  1: [0, 0, 0],
+  2: [0, 0, 0],
+  3: [0, 0, 0],
+  4: [0, 0, 0],
+};
+const _cardPos  = CARD_SPLAT_POSITION[CARD_ID]  || [0, 0.5, 0];
+const _scenePos = SCENE_SPLAT_POSITION[CARD_ID] || [0, 0.5, 0];
+
+// ── Per-card splat Z clipping [zMin, zMax] (local space, OpenCV: +Z = 远离相机) ──
+// 设为 null 表示不裁剪；只保留 zMin ≤ z ≤ zMax 范围内的 splat
+const CARD_SPLAT_CLIP = {
+  1: [0.75, null],
+  2: [0.1, null],
+  3: [0.1, null],
+  4: [0.1, null],
+};
+const SCENE_SPLAT_CLIP = {
+  1: [1, null],
+  2: [0.1, null],
+  3: [0.75, null],
+  4: [0.1, null],
+};
+const _cardClip  = CARD_SPLAT_CLIP[CARD_ID]  || null;
+const _sceneClip = SCENE_SPLAT_CLIP[CARD_ID] || null;
+
+function clipSplats(splatMesh, zMin, zMax) {
+  let clipped = 0;
+  splatMesh.forEachSplat((index, center, scales, quaternion, opacity, color) => {
+    const z = center.z;
+    if ((zMin != null && z < zMin) || (zMax != null && z > zMax)) {
+      splatMesh.packedSplats.setSplat(index, center, scales, quaternion, 0, color);
+      clipped++;
+    }
+  });
+  if (clipped > 0) {
+    splatMesh.packedSplats.needsUpdate = true;
+    splatMesh.updateVersion();
+    console.log(`[clipSplats] removed ${clipped} / ${splatMesh.numSplats} splats outside z=[${zMin ?? '-∞'}, ${zMax ?? '+∞'}]`);
+  }
+}
 
 // ── Default camera parameters ──
 const DEFAULT_INTRINSICS = [
@@ -337,8 +404,10 @@ const CARD_ZOOM_ENTER = 1.06;  // target scale when fullscreen is active
 const CARD_ZOOM_DAMP  = 0.09;  // matches ~0.45 s CSS overlay transition
 
 // ── Viewer state ──
-let viewerCard  = null;
-let viewerScene = null;
+// Card viewer (rendered into #card element)
+let cardRenderer = null, cardScene = null, cardCamera = null, cardSplat = null;
+// Scene viewer (rendered into #scene-wrap element)
+let sceneRenderer = null, sceneScene = null, sceneCamera = null, sceneSplat = null;
 let cardLoaded  = false;
 let sceneLoaded = false;
 // isOverlayVisible: true while scene overlay is visible (incl. exit transition)
@@ -379,51 +448,41 @@ let cardOrbit  = makeOrbit();
 let sceneOrbit = makeOrbit();
 
 // ── Robust front-center of splat scene ──────────────────────────────────────
-// Reads vertex positions directly from the Three.js geometry buffer
-// (no library-specific API required).
-// Discards points behind the camera, removes depth outliers via percentile,
-// returns the centroid shifted to the 10th-percentile depth plane
-// (≈ front face of the clean bounding box).
+// Uses SparkJS forEachSplat API to sample positions, discard outliers, and
+// return the centroid shifted to the 10th-percentile depth plane.
 // Returns [x,y,z] or null → safe fallback to original orbit.
 function computeRobustFrontCenter(splatMesh, fwd, camPos) {
   try {
-    const posArr = splatMesh?.geometry?.attributes?.position?.array;
-    if (!posArr || posArr.length < 9) return null;
+    if (!splatMesh || !splatMesh.isInitialized) return null;
+    const numSplats = splatMesh.numSplats || 0;
+    if (numSplats < 9) return null;
 
-    const total = Math.floor(posArr.length / 3);
-    const step  = Math.max(1, Math.floor(total / 3000)); // sample ≤ 3000 points
-    const pts   = [];
+    const step = Math.max(1, Math.floor(numSplats / 3000)); // sample ≤ 3000 points
+    const pts  = [];
 
-    for (let i = 0; i < total; i += step) {
-      const x = posArr[i * 3];
-      const y = posArr[i * 3 + 1];
-      const z = posArr[i * 3 + 2];
-      if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
-
-      // Signed depth along camera forward (positive = in front of camera)
+    splatMesh.forEachSplat((index, center) => {
+      if (index % step !== 0) return;
+      const x = center.x, y = center.y, z = center.z;
+      if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
       const d = (x - camPos[0]) * fwd[0] +
                 (y - camPos[1]) * fwd[1] +
                 (z - camPos[2]) * fwd[2];
-      if (d <= 0) continue; // discard everything behind/beside the camera
-
+      if (d <= 0) return;
       pts.push({ x, y, z, d });
-    }
+    });
 
     if (pts.length < 10) return null;
 
-    // Sort by depth; keep 5th – 95th percentile to eliminate outliers
     pts.sort((a, b) => a.d - b.d);
     const lo       = Math.floor(pts.length * 0.05);
     const hi       = Math.ceil (pts.length * 0.95);
     const filtered = pts.slice(lo, hi);
     if (!filtered.length) return null;
 
-    // Centroid of filtered points
     let mx = 0, my = 0, mz = 0;
     for (const p of filtered) { mx += p.x; my += p.y; mz += p.z; }
     mx /= filtered.length; my /= filtered.length; mz /= filtered.length;
 
-    // "Front depth" = 10th percentile of filtered depths (front face of bbox)
     const frontDepth  = filtered[Math.floor(filtered.length * 0.10)].d;
     const centerDepth = (mx - camPos[0]) * fwd[0] +
                         (my - camPos[1]) * fwd[1] +
@@ -518,109 +577,119 @@ async function loadCameraParams(url) {
   }
 }
 
-function detectFormat(GS3D, name) {
+// ── Detect splat file type for SparkJS ──
+function detectSplatFileType(name) {
   const lower = name.toLowerCase();
-  if (lower.endsWith('.ply'))    return GS3D.SceneFormat.Ply;
-  if (lower.endsWith('.splat'))  return GS3D.SceneFormat.Splat;
-  if (lower.endsWith('.ksplat')) return GS3D.SceneFormat.KSplat;
-  return GS3D.SceneFormat.Ply;
+  if (lower.endsWith('.ksplat'))  return 'ksplat';
+  if (lower.endsWith('.splat'))   return 'splat';
+  if (lower.endsWith('.spz'))     return 'spz';
+  if (lower.endsWith('.sog'))     return 'pcsogszip';   // SparkJS pcsogszip format
+  // .ply auto-detected by SparkJS from file contents
+  return undefined;
 }
 
-// ── Load card viewer (card PLY into #card) ──
-async function loadCardViewer(GS3D, params) {
+// ── Create a canvas + THREE.js WebGLRenderer inside a container element ──
+function createRendererInContainer(THREE, container) {
+  const canvas = document.createElement('canvas');
+  canvas.style.cssText = 'display:block;position:absolute;inset:0;width:100%;height:100%;pointer-events:none;';
+  container.appendChild(canvas);
+  const { width, height } = container.getBoundingClientRect();
+  const w = Math.max(width, 1), h = Math.max(height, 1);
+  console.log(`[createRenderer] container size: ${width}x${height}, using: ${w}x${h}`);
+  const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(w, h);
+  console.log(`[createRenderer] renderer initialized, pixelRatio: ${window.devicePixelRatio}`);
+  return { renderer, canvas, w, h };
+}
+
+// ── Load card viewer (card splat into #card) ──
+async function loadCardViewer(THREE, Spark, params) {
   const intrinsics = params?.intrinsics || DEFAULT_INTRINSICS;
   const extrinsics = params?.extrinsics || DEFAULT_EXTRINSICS;
   const vfov  = computeVFOV(intrinsics);
   const setup = computeCameraSetup(extrinsics);
 
-  viewerCard = new GS3D.Viewer({
-    rootElement: card,
-    selfDrivenMode: false,
-    sharedMemoryForWorkers: false,
-    useBuiltInControls: false,
-    sceneRevealMode: GS3D.SceneRevealMode.Instant,
-    initialCameraPosition: setup.pos,
-    initialCameraLookAt: setup.lookAt,
-    cameraUp: setup.up,
-    focalAdjustment: 3.0,
+  const { renderer, w, h } = createRendererInContainer(THREE, card);
+  cardRenderer = renderer;
+
+  cardScene  = new THREE.Scene();
+  cardCamera = new THREE.PerspectiveCamera(vfov, w / h, 0.1, 1000);
+  cardCamera.up.set(setup.up[0], setup.up[1], setup.up[2]);
+  cardCamera.position.set(setup.pos[0], setup.pos[1], setup.pos[2]);
+  cardCamera.lookAt(setup.lookAt[0], setup.lookAt[1], setup.lookAt[2]);
+
+  const spark = new Spark.SparkRenderer({
+    renderer: cardRenderer,
+    focalAdjustment: 1.0,
+    minAlpha: 5 / 255,
   });
+  cardScene.add(spark);
 
-  await viewerCard.addSplatScene(CARD_PLY, {
-    showLoadingUI: false,
-    splatAlphaRemovalThreshold: 5,
-    rotation: [1, 0, 0, 0],
-    format: detectFormat(GS3D, CARD_PLY),
+  cardSplat = new Spark.SplatMesh({
+    url:      CARD_PLY,
+    fileType: detectSplatFileType(CARD_PLY),
   });
+  cardSplat.quaternion.set(1, 0, 0, 0);
+  cardSplat.position.set(_cardPos[0], _cardPos[1], _cardPos[2]);
+  cardScene.add(cardSplat);
 
-  if (viewerCard.splatMesh) viewerCard.splatMesh.setSplatScale(SPLAT_SCALE);
+  await cardSplat.initialized;
+  cardSplat.scale.setScalar(SPLAT_SCALE);
+  if (_cardClip) clipSplats(cardSplat, _cardClip[0], _cardClip[1]);
+  console.log('[card splat] initialized, numSplats:', cardSplat.numSplats);
 
-  const cam = viewerCard.camera;
-  if (cam) {
-    cam.fov = vfov;
-    cam.updateProjectionMatrix();
-    cam.updateMatrixWorld(true);
-  }
-
-  const _cardPivot = computeRobustFrontCenter(viewerCard.splatMesh, setup.fwd, setup.pos);
-  const _cardOk    = _cardPivot && applyPivotOrbit(cardOrbit, setup.pos, _cardPivot, setup.up, setup.fwd);
-  console.log('[card orbit]', _cardOk ? `pivot=${JSON.stringify(_cardPivot.map(v=>+v.toFixed(3)))}` : 'fallback to lookAt');
-  if (!_cardOk) {
-    cardOrbit.radius = ORBIT_DIST;
-    cardOrbit.cx = setup.lookAt[0]; cardOrbit.cy = setup.lookAt[1]; cardOrbit.cz = setup.lookAt[2];
-    cardOrbit.rx = setup.right[0];  cardOrbit.ry = setup.right[1];  cardOrbit.rz = setup.right[2];
-    cardOrbit.ux = setup.up[0];     cardOrbit.uy = setup.up[1];     cardOrbit.uz = setup.up[2];
-    cardOrbit.bx = setup.back[0];   cardOrbit.by = setup.back[1];   cardOrbit.bz = setup.back[2];
-  }
+  // Orbit: use fixed lookAt as pivot so all cards share the same rotation center
+  cardOrbit.radius = ORBIT_DIST;
+  cardOrbit.cx = setup.lookAt[0]; cardOrbit.cy = setup.lookAt[1]; cardOrbit.cz = setup.lookAt[2];
+  cardOrbit.rx = setup.right[0];  cardOrbit.ry = setup.right[1];  cardOrbit.rz = setup.right[2];
+  cardOrbit.ux = setup.up[0];     cardOrbit.uy = setup.up[1];     cardOrbit.uz = setup.up[2];
+  cardOrbit.bx = setup.back[0];   cardOrbit.by = setup.back[1];   cardOrbit.bz = setup.back[2];
 
   cardLoaded = true;
 }
 
-// ── Load scene viewer (scene PLY into #scene-wrap) ──
-async function loadSceneViewer(GS3D, params) {
+// ── Load scene viewer (scene splat into #scene-wrap) ──
+async function loadSceneViewer(THREE, Spark, params) {
   const intrinsics = params?.intrinsics || DEFAULT_INTRINSICS;
   const extrinsics = params?.extrinsics || DEFAULT_EXTRINSICS;
   currentIntrinsics = intrinsics;
   const vfov  = computeVFOV(intrinsics);
   const setup = computeCameraSetup(extrinsics);
 
-  viewerScene = new GS3D.Viewer({
-    rootElement: sceneWrap,
-    selfDrivenMode: false,
-    sharedMemoryForWorkers: false,
-    useBuiltInControls: false,
-    sceneRevealMode: GS3D.SceneRevealMode.Instant,
-    initialCameraPosition: setup.pos,
-    initialCameraLookAt: setup.lookAt,
-    cameraUp: setup.up,
-    focalAdjustment: 3.0,
+  const { renderer, w, h } = createRendererInContainer(THREE, sceneWrap);
+  sceneRenderer = renderer;
+
+  sceneScene  = new THREE.Scene();
+  sceneCamera = new THREE.PerspectiveCamera(vfov, w / h, 0.1, 1000);
+  sceneCamera.up.set(setup.up[0], setup.up[1], setup.up[2]);
+  sceneCamera.position.set(setup.pos[0], setup.pos[1], setup.pos[2]);
+  sceneCamera.lookAt(setup.lookAt[0], setup.lookAt[1], setup.lookAt[2]);
+
+  const spark = new Spark.SparkRenderer({
+    renderer: sceneRenderer,
+    focalAdjustment: 1.0,
+    minAlpha: 5 / 255,
   });
+  sceneScene.add(spark);
 
-  await viewerScene.addSplatScene(SCENE_PLY, {
-    showLoadingUI: false,
-    splatAlphaRemovalThreshold: 5,
-    rotation: [1, 0, 0, 0],
-    format: detectFormat(GS3D, SCENE_PLY),
+  sceneSplat = new Spark.SplatMesh({
+    url:      SCENE_PLY,
+    fileType: detectSplatFileType(SCENE_PLY),
   });
+  sceneSplat.quaternion.set(1, 0, 0, 0);
+  sceneSplat.position.set(_scenePos[0], _scenePos[1], _scenePos[2]);
+  sceneScene.add(sceneSplat);
 
-  if (viewerScene.splatMesh) viewerScene.splatMesh.setSplatScale(SPLAT_SCALE);
+  await sceneSplat.initialized;
+  sceneSplat.scale.setScalar(SPLAT_SCALE);
+  if (_sceneClip) clipSplats(sceneSplat, _sceneClip[0], _sceneClip[1]);
 
-  const cam = viewerScene.camera;
-  if (cam) {
-    cam.fov = vfov;
-    cam.updateProjectionMatrix();
-    cam.updateMatrixWorld(true);
-  }
-
-  const _scenePivot = computeRobustFrontCenter(viewerScene.splatMesh, setup.fwd, setup.pos);
-  const _sceneOk    = _scenePivot && applyPivotOrbit(sceneOrbit, setup.pos, _scenePivot, setup.up, setup.fwd);
-  console.log('[scene orbit]', _sceneOk ? `pivot=${JSON.stringify(_scenePivot.map(v=>+v.toFixed(3)))}` : 'fallback to lookAt');
-  if (!_sceneOk) {
-    sceneOrbit.radius = ORBIT_DIST;
-    sceneOrbit.cx = setup.lookAt[0]; sceneOrbit.cy = setup.lookAt[1]; sceneOrbit.cz = setup.lookAt[2];
-    sceneOrbit.rx = setup.right[0];  sceneOrbit.ry = setup.right[1];  sceneOrbit.rz = setup.right[2];
-    sceneOrbit.ux = setup.up[0];     sceneOrbit.uy = setup.up[1];     sceneOrbit.uz = setup.up[2];
-    sceneOrbit.bx = setup.back[0];   sceneOrbit.by = setup.back[1];   sceneOrbit.bz = setup.back[2];
-  }
+  sceneOrbit.radius = ORBIT_DIST;
+  sceneOrbit.cx = setup.lookAt[0]; sceneOrbit.cy = setup.lookAt[1]; sceneOrbit.cz = setup.lookAt[2];
+  sceneOrbit.rx = setup.right[0];  sceneOrbit.ry = setup.right[1];  sceneOrbit.rz = setup.right[2];
+  sceneOrbit.ux = setup.up[0];     sceneOrbit.uy = setup.up[1];     sceneOrbit.uz = setup.up[2];
+  sceneOrbit.bx = setup.back[0];   sceneOrbit.by = setup.back[1];   sceneOrbit.bz = setup.back[2];
 
   sceneLoaded = true;
 }
@@ -638,8 +707,8 @@ function tick() {
     zoomFactor += (targetZoom - zoomFactor) * ZOOM_DAMP;
 
     // ── Card viewer (always orbit; CSS tilt + zoom animation always updated) ──
-    if (cardLoaded && viewerCard?.camera) {
-      applyOrbit(viewerCard.camera, cardOrbit, alpha, beta, cardOrbit.radius);
+    if (cardLoaded && cardCamera) {
+      applyOrbit(cardCamera, cardOrbit, alpha, beta, cardOrbit.radius);
 
       // cardScale interpolates: 1.0 in normal mode, CARD_ZOOM_ENTER in fullscreen
       const cardScaleTarget = isFullscreen ? CARD_ZOOM_ENTER : 1.0;
@@ -658,26 +727,39 @@ function tick() {
     }
 
     // ── Scene viewer (orbit + focal zoom; only when overlay is visible) ──
-    if (sceneLoaded && viewerScene?.camera && isOverlayVisible) {
+    if (sceneLoaded && sceneCamera && isOverlayVisible) {
       const radius = isFullscreen
         ? sceneOrbit.radius / zoomFactor
         : sceneOrbit.radius;
-      applyOrbit(viewerScene.camera, sceneOrbit, alpha, beta, radius);
+      applyOrbit(sceneCamera, sceneOrbit, alpha, beta, radius);
 
       if (Math.abs(targetFocalOffset - focalOffset) > 0.01) {
         focalOffset += (targetFocalOffset - focalOffset) * FOCAL_ZOOM_DAMP;
-        viewerScene.camera.fov = computeVFOV(currentIntrinsics, focalOffset);
-        viewerScene.camera.updateProjectionMatrix();
+        sceneCamera.fov = computeVFOV(currentIntrinsics, focalOffset);
+        sceneCamera.updateProjectionMatrix();
       }
     }
   }
 
   // Render: card always; scene only while overlay is visible
-  if (viewerCard) {
-    try { viewerCard.update(); viewerCard.render(); } catch {}
+  if (cardRenderer && cardScene && cardCamera) {
+    try { 
+      cardRenderer.render(cardScene, cardCamera);
+      // Log first few frames for debugging
+      if (!window.__cardRenderCount) window.__cardRenderCount = 0;
+      if (window.__cardRenderCount < 5) {
+        console.log(`[render ${window.__cardRenderCount}] card rendered`);
+        window.__cardRenderCount++;
+      }
+    } catch (e) {
+      if (!window.__cardRenderError) {
+        console.error('[render] card error:', e);
+        window.__cardRenderError = true;
+      }
+    }
   }
-  if (viewerScene && isOverlayVisible) {
-    try { viewerScene.update(); viewerScene.render(); } catch {}
+  if (sceneRenderer && sceneScene && sceneCamera && isOverlayVisible) {
+    try { sceneRenderer.render(sceneScene, sceneCamera); } catch {}
   }
 }
 
@@ -824,15 +906,15 @@ gyroBtn.addEventListener('click', async () => {
     return;
   }
 
-  if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
-    return;
-  }
-
   if (typeof DeviceOrientationEvent.requestPermission === 'function') {
     try {
       const perm = await DeviceOrientationEvent.requestPermission();
-      if (perm !== 'granted') return;
-    } catch {
+      if (perm !== 'granted') {
+        console.warn('[gyro] permission denied');
+        return;
+      }
+    } catch (err) {
+      console.warn('[gyro] permission request failed:', err);
       return;
     }
   }
@@ -949,28 +1031,23 @@ checkScene.addEventListener('change', () => {
 // ========== Resize observers ==========
 
 new ResizeObserver(() => {
-  if (!viewerCard?.camera) return;
+  if (!cardCamera || !cardRenderer) return;
   const { width, height } = card.getBoundingClientRect();
-  const renderer = viewerCard.renderer || viewerCard.renderModule?.renderer;
-  if (renderer) {
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(width, height);
-  }
-  viewerCard.camera.aspect = width / height;
-  viewerCard.camera.updateProjectionMatrix();
+  if (width === 0 || height === 0) return;
+  cardRenderer.setPixelRatio(window.devicePixelRatio);
+  cardRenderer.setSize(width, height);
+  cardCamera.aspect = width / height;
+  cardCamera.updateProjectionMatrix();
 }).observe(card);
 
 new ResizeObserver(() => {
-  if (!viewerScene?.camera) return;
+  if (!sceneCamera || !sceneRenderer) return;
   const { width, height } = sceneWrap.getBoundingClientRect();
   if (width === 0 || height === 0) return;
-  const renderer = viewerScene.renderer || viewerScene.renderModule?.renderer;
-  if (renderer) {
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(width, height);
-  }
-  viewerScene.camera.aspect = width / height;
-  viewerScene.camera.updateProjectionMatrix();
+  sceneRenderer.setPixelRatio(window.devicePixelRatio);
+  sceneRenderer.setSize(width, height);
+  sceneCamera.aspect = width / height;
+  sceneCamera.updateProjectionMatrix();
 }).observe(sceneWrap);
 
 // ── Wait for an img element to finish loading (resolves immediately if already complete) ──
@@ -986,16 +1063,16 @@ function waitForImage(imgEl) {
 
 async function init() {
   try {
-    const [params, GS3D] = await Promise.all([
+    const [[THREE, Spark], params] = await Promise.all([
+      SparkReady,
       loadCameraParams('./camera.json'),
-      GS3DReady
     ]);
 
-    // Phase 1: load only what's needed for initial display (_b.ksplat + images).
-    // _a.ksplat (scene viewer) is ~27 MB and only needed on double-tap;
+    // Phase 1: load only what's needed for initial display (_b.sog + images).
+    // _a.sog (scene viewer) is ~10 MB and only needed on double-tap;
     // loading both files at once doubles peak memory and can trigger an iOS tab kill.
     await Promise.all([
-      loadCardViewer(GS3D, params),
+      loadCardViewer(THREE, Spark, params),
       waitForImage(cardFrame),
       waitForImage(cardChar),
       waitForImage(cardEffect),
@@ -1013,7 +1090,7 @@ async function init() {
 
     // Phase 2: load scene viewer silently in background.
     // Double-tap gesture checks sceneLoaded before entering fullscreen.
-    loadSceneViewer(GS3D, params).catch(err => {
+    loadSceneViewer(THREE, Spark, params).catch(err => {
       console.warn('Scene viewer background load failed:', err);
     });
   } catch (err) {

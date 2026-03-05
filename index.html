@@ -6,29 +6,52 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Card Gallery</title>
-  <!-- Prefetch loading icon so it's cached when index.html's loading screen appears -->
   <link rel="prefetch" href="./files/160icon.webp" as="image" type="image/webp">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-    html, body {
+    /* ── 滚动容器在 html 上，body 高度由 JS 设置 ── */
+    html {
       width: 100%; height: 100%;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
+      background: #000;
+    }
+    body {
+      width: 100%;
       background: #000;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+      /* height 由 JS 按缩放后高度设置，以撑开滚动空间 */
+    }
+
+    /* ══════════════════════════════════════════════════════════
+       #design-root — 固定设计尺寸画布
+       JS 为它设置 width / height / transform: scale()，
+       使整体在任意视口宽度内按比例缩放。
+
+       注意：transform 上下文使内部所有 position:fixed 元素
+       自动相对本容器定位（不再相对真实视口），因此内部 CSS
+       无需修改为 absolute，只需把 vw/vh 换成对应断点的 px。
+    ══════════════════════════════════════════════════════════ */
+    #design-root {
+      position: relative;
+      transform-origin: top left;
+      overflow: hidden;
       touch-action: none;
       -webkit-user-select: none;
       user-select: none;
+      /* width / height / transform: scale() — set by JS */
     }
 
-    /* ── Background image ── */
+    /* ── Background ── */
     .bg-layer {
       position: fixed;
       inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;        /* fill viewport, scale by whichever axis is larger */
-      object-position: top center;
+      background-size: auto 100%;
+      background-position: center center;
+      background-repeat: no-repeat;
       z-index: 0;
       pointer-events: none;
     }
@@ -41,21 +64,16 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      /* padding-top: 5vh; */
       pointer-events: none;
       mix-blend-mode: screen;
+      /* padding-top / img width / subtitle margin: 见断点 */
     }
-
     .title-layer img {
-      width: 70vw;
       height: auto;
       display: block;
     }
-
     .title-layer .subtitle {
-      margin-top: -5vh;
       font-family: 'PingFang SC', 'SF Pro SC', 'SF Pro Display', -apple-system, sans-serif;
-      font-size: 14px;
       color: rgba(255, 255, 255, 0.85);
       text-align: center;
       line-height: 1.6;
@@ -65,7 +83,6 @@
     .glow {
       position: fixed;
       top: 45%; left: 50%;
-      width: 45vmin; height: 45vmin;
       border-radius: 50%;
       background: radial-gradient(circle, rgba(0,190,80,0.55) 0%, rgba(0,140,60,0.2) 40%, transparent 70%);
       transform: translate(-50%, -50%) scale(1);
@@ -74,25 +91,22 @@
       animation: breathe 5s ease-in-out infinite;
       z-index: 2;
     }
-
     @keyframes breathe {
-      0%, 100% { transform: translate(-50%, -50%) scale(1);   filter: blur(50px); opacity: 0.6; }
-      50%      { transform: translate(-50%, -50%) scale(1.45); filter: blur(80px); opacity: 1;   }
+      0%, 100% { transform: translate(-50%, -50%) scale(1);    filter: blur(50px); opacity: 0.6; }
+      50%       { transform: translate(-50%, -50%) scale(1.45); filter: blur(80px); opacity: 1;   }
     }
 
-    /* ── Gallery container ── */
+    /* ── Gallery ── */
     #gallery {
-      position: relative;
-      width: 100%; height: 100%;
+      position: fixed;
+      inset: 0;
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
-      padding-bottom: 0vh;
       z-index: 3;
     }
 
     .card-stack {
-      --card-w: min(68vw, calc(70vh * 3 / 4));
       --card-r: calc(var(--card-w) * 0.075);
       position: relative;
       width: var(--card-w);
@@ -110,51 +124,113 @@
       cursor: pointer;
       transform-origin: 50% 100%;
     }
-
     .stack-card img {
       position: absolute;
       inset: 0;
-      width: 100%;
-      height: 100%;
+      width: 100%; height: 100%;
       object-fit: cover;
       display: block;
       pointer-events: none;
       transition: opacity 350ms ease;
     }
-
     .stack-card .card-front { opacity: 0; }
     .stack-card .card-back  { opacity: 1; }
-
     .stack-card[data-pos="0"] .card-front { opacity: 1; }
     .stack-card[data-pos="0"] .card-back  { opacity: 0; }
+    .stack-card.card-revealed[data-card-id="1"] { box-shadow: 0 0 80px 2px rgba(211,255,80,0.313); }
+    .stack-card.card-revealed[data-card-id="2"] { box-shadow: 0 0 80px 2px rgba(255,223,18,0.45);  }
+    .stack-card.card-revealed[data-card-id="3"] { box-shadow: 0 0 80px 2px rgba(253,75,75,0.45);   }
+    .stack-card.card-revealed[data-card-id="4"] { box-shadow: 0 0 80px 2px rgba(253,140,75,0.45);  }
+    .stack-card:not([data-pos="0"])             { box-shadow: 0 8px 24px rgba(0,0,0,0.35);          }
 
-    .stack-card.card-revealed[data-card-id="1"] {
-      box-shadow: 0 0 80px 2px rgba(211, 255, 80, 0.313);
+    /* ══════════════════════════════════════════════════════════
+       断点布局  —  所有尺寸/位置均为 px（对应各断点设计稿）
+       内部 position:fixed 已由 transform 上下文锁定到设计画布，
+       px 值即为设计稿像素，JS scale() 统一缩放无需再换算。
+
+       手机  390 × 844 px   (vw ≤ 599)
+       平板  768 × 1024 px  (600 ≤ vw ≤ 1023)
+       电脑 1440 × 900 px   (vw ≥ 1024)
+    ══════════════════════════════════════════════════════════ */
+
+    /* ── 手机 390×844 (default) ── */
+    .title-layer          { padding-top: 8px;   }   /* 1vh × 844   */
+    .title-layer img      { width: 273px;        }   /* 70% × 390   */
+    .title-layer .subtitle{ margin-top: -30px; font-size: 14px; } /* -5vh × 844 */
+    .glow                 { width: 175px; height: 175px; } /* 45vmin × 390 */
+    #gallery              { padding-top: 200px;  }   /* 34vh × 844  */
+    .card-stack           { --card-w: 265px;     }   /* min(68%×390=265, 62%×844×¾=392) */
+
+    /* ── 平板 768×1024 (600px – 1023px) ── */
+    @media (min-width: 600px) and (max-width: 1023px) {
+      .title-layer          { padding-top: 0px;  }  /* 2vh × 1024  */
+      .title-layer img      { width: 399px;        }  /* 52% × 768   */
+      .title-layer .subtitle{ margin-top: -64px; font-size: 15px; } /* -3.5vh × 1024 */
+      .glow                 { width: 346px; height: 346px; } /* 45vmin × 768 */
+      #gallery              { padding-top: 228px;  }  /* 30vh × 1024 */
+      .card-stack           { --card-w: 300px;     }  /* min(44%×768=338, 62%×1024×¾=476) */
     }
-    .stack-card.card-revealed[data-card-id="2"] {
-      box-shadow: 0 0 80px 2px rgba(255, 223, 18, 0.45);
-    }
-    .stack-card.card-revealed[data-card-id="3"] {
-      box-shadow: 0 0 80px 2px rgba(253, 75, 75, 0.45);
-    }
-    .stack-card.card-revealed[data-card-id="4"] {
-      box-shadow: 0 0 80px 2px rgba(253, 140, 75, 0.45);
-    }
-    .stack-card:not([data-pos="0"]) {
-      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+
+    /* ── 电脑 1440×900 (≥ 1024px) ── */
+    @media (min-width: 1024px) {
+      .title-layer          { padding-top: 0px;  }   /* 3vh × 900   */
+      .title-layer img      { width: 460px;        }   /* min(36%×1440=518, 460) */
+      .title-layer .subtitle{ margin-top: -80px; font-size: 15px; } /* -2vh × 900 */
+      .glow                 { width: 405px; height: 405px; } /* 45vmin × 900 */
+      #gallery              { padding-top: 254px;  }   /* 28vh × 900  */
+      .card-stack           { --card-w: 300px;     }   /* min(22%×1440=317, 58%×900×¾=391) */
     }
   </style>
 </head>
 <body>
-  <img class="bg-layer" src="./files/BG.webp" alt="Background">
-  <div class="title-layer">
-    <img src="./files/title.webp" alt="Title">
-    <p class="subtitle">选一张魔法卡片，<br>轻触开启与主播的四季之旅～</p>
+  <div id="design-root">
+    <div class="bg-layer" style="background-image: url('./files/BG-auto.webp')"></div>
+    <div class="title-layer">
+      <img src="./files/title.webp" alt="Title">
+      <p class="subtitle">选一张魔法卡片，<br>轻触开启与主播的四季之旅～</p>
+    </div>
+    <div class="glow"></div>
+    <div id="gallery">
+      <div class="card-stack" id="card-stack"></div>
+    </div>
   </div>
-  <div class="glow"></div>
-  <div id="gallery">
-    <div class="card-stack" id="card-stack"></div>
-  </div>
+
+  <script>
+    /* ── 整体缩放逻辑 ──────────────────────────────────────────
+       每个断点有固定的设计画布尺寸（dw × dh）。
+       JS 将 #design-root 设为设计尺寸，再用 scale(vw/dw) 整体缩放，
+       使内容在该断点范围内始终保持设计比例，不发生重排。
+       body.height 随缩放后高度更新，确保可以上下滚动。
+    ───────────────────────────────────────────────────────── */
+    (function () {
+      var DESIGNS = [
+        { minW: 0,    maxW: 599,        dw: 390,  dh: 844  },
+        { minW: 600,  maxW: 1023,       dw: 768,  dh: 1024 },
+        { minW: 1024, maxW: Infinity,   dw: 1440, dh: 900  },
+      ];
+
+      function applyScale() {
+        var vw   = window.innerWidth;
+        var root = document.getElementById('design-root');
+        if (!root) return;
+
+        var bp = DESIGNS.find(function (b) { return vw >= b.minW && vw <= b.maxW; });
+        if (!bp) return;
+
+        var scale = vw / bp.dw;
+        root.style.width     = bp.dw + 'px';
+        root.style.height    = bp.dh + 'px';
+        root.style.transform = 'scale(' + scale + ')';
+
+        /* 让 body 足够高，使得缩放后内容可滚动 */
+        document.body.style.height = Math.ceil(bp.dh * scale) + 'px';
+      }
+
+      applyScale();
+      window.addEventListener('resize', applyScale);
+    })();
+  </script>
+
   <script src="gallery.js"></script>
 </body>
 </html>

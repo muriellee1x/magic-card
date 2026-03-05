@@ -7,13 +7,41 @@ const CARDS = [
 ];
 const CARD_BACK_IMG = './files/card-back.webp';
 
-// x/y values are percentages of the card's own width/height (used in CSS translate)
-const POSITIONS = [
-  { x: 0,  y: 10,   rot: 0,   scale: 0.90, opacity: 1.00 },   // main card
-  { x: 0,  y: 105, rot: -20, scale: 0.80, opacity: 1.00 },   // stack: 2nd
-  { x: 0,  y: 105, rot: 0,   scale: 0.80, opacity: 1.00 },   // stack: 3rd
-  { x: 0,  y: 105, rot: 20,  scale: 0.80, opacity: 1.00 },   // stack: 4th
-];
+// x/y: percentages of the card's own width/height (used in CSS translate)
+// All values adapt to the three layout breakpoints (matches index.html design widths)
+//
+//              手机 390px  |  平板 768px  |  电脑 1440px
+//  main  y         10     |     10       |     10
+//  stack y        105     |    108       |    112       ← 叠牌越大屏幕越低
+//  stack x          0     |      0       |      0
+//  rot            ±20     |    ±16       |    ±12
+function computePositions() {
+  const vw = window.innerWidth;
+
+  const mainY  = 10;
+
+  const stackY = vw >= 1024 ? 98
+               : vw >= 600  ? 100
+                            : 105;
+
+  // const stackX = 0;
+
+  const stackX    = vw >= 1024 ? 40
+                : vw >= 600  ? 30
+                            : 0;
+
+  const rot    = vw >= 1024 ? 30
+               : vw >= 600  ? 30
+                            : 20;
+
+  return [
+    { x: 0,      y: mainY,  rot: 0,    scale: 0.90, opacity: 1.00 },  // main card
+    { x: -stackX, y: stackY+stackX/4, rot: -rot, scale: 0.80, opacity: 1.00 },  // stack: 2nd
+    { x: 0, y: stackY, rot: 0,    scale: 0.80, opacity: 1.00 },  // stack: 3rd
+    { x: +stackX, y: stackY+stackX/4, rot: +rot, scale: 0.80, opacity: 1.00 },  // stack: 4th
+  ];
+}
+let POSITIONS = computePositions();
 
 const ANIM_DURATION = 550;
 const FLIP_DURATION = 300;
@@ -234,6 +262,12 @@ function onUp(y) {
     dy > 0 ? next() : prev();
   }
 }
+
+// Re-compute positions when breakpoint changes (e.g. window resize)
+window.addEventListener('resize', () => {
+  POSITIONS = computePositions();
+  if (!busy) layoutAll(false);
+});
 
 document.addEventListener('touchstart', e => {
   if (e.touches.length === 1) onDown(e.touches[0].clientY);

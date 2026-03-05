@@ -24,11 +24,9 @@
     #page-bg {
       position: fixed;
       inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;        /* fill viewport, scale by whichever axis is larger */
-      object-position: top center;
-      display: block;
+      background-size: auto 100%;
+      background-position: center center;
+      background-repeat: no-repeat;
       pointer-events: none;
       z-index: 0;
       opacity: 0;
@@ -47,7 +45,7 @@
       gap: 20px;
       padding-bottom: 6vh;
       /* Perspective on parent so children's rotateX/Y have depth */
-      perspective: 1000px;
+      perspective: 800px;
     }
 
     /* Wrapper that receives the whole-card CSS 3D tilt transform */
@@ -74,7 +72,6 @@
       aspect-ratio: 3 / 4;
       position: relative;
       will-change: transform;
-      isolation: isolate; /* keep blend modes inside the card stack */
       transform-style: preserve-3d;
     }
 
@@ -245,7 +242,7 @@
       pointer-events: none;
       display: block;
       opacity: 1;
-      transform: translateZ(150px) translate(-50%, -50%);
+      transform: translateZ(30px) translate(-50%, -50%);
     }
     #card-character-canvas {
       display: none;
@@ -269,6 +266,7 @@
       transform: scale(1.0);
     }
     #scene-wrap {
+      position: relative;
       width: 100%;
       height: 100%;
     }
@@ -403,7 +401,7 @@
       max-width: 62%;
       line-height: 1.5;
       letter-spacing: 0.02em;
-      transform: translateZ(200px);
+      transform: translateZ(31px);
       white-space: nowrap;
       transition: transform 0.15s ease;
     }
@@ -448,10 +446,20 @@
       transform: rotate(45deg);
     }
   </style>
+  <!-- Import map: 保证 SparkJS 和业务代码使用同一 THREE.js 实例 (SparkJS 0.1.10 需要 ^0.178.0) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://esm.sh/three@0.178.0",
+      "three/": "https://esm.sh/three@0.178.0/",
+      "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/0.1.10/spark.module.js"
+    }
+  }
+  </script>
 </head>
 <body>
   <!-- Per-card page background (revealed after loading) -->
-  <img id="page-bg" alt="" aria-hidden="true">
+  <div id="page-bg" aria-hidden="true"></div>
 
   <!-- Scene-loading toast -->
   <div id="scene-toast" class="hidden">魔法场景加载中，稍等片刻</div>
