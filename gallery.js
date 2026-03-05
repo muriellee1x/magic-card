@@ -22,7 +22,7 @@ function computePositions() {
 
   const stackY = vw >= 1024 ? 98
                : vw >= 600  ? 100
-                            : 105;
+                            : 100;
 
   // const stackX = 0;
 
