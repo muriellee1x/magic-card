@@ -49,11 +49,16 @@
     .bg-layer {
       position: fixed;
       inset: 0;
-      background-size: auto 100%;
-      background-position: center center;
-      background-repeat: no-repeat;
       z-index: 0;
       pointer-events: none;
+    }
+    .bg-layer video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center center;
     }
 
     /* ── Title layer ── */
@@ -184,7 +189,9 @@
 </head>
 <body>
   <div id="design-root">
-    <div class="bg-layer" style="background-image: url('./files/BG-auto.webp')"></div>
+    <div class="bg-layer">
+      <video src="./files/BG-animate.mp4" autoplay loop muted playsinline></video>
+    </div>
     <div class="title-layer">
       <img src="./files/title.webp" alt="Title">
       <p class="subtitle">选一张魔法卡片，<br>轻触开启与主播的四季之旅～</p>

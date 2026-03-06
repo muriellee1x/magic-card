@@ -728,6 +728,8 @@ function tick() {
         flipAngle += diff * 0.22;
         if (Math.abs(diff) < 0.4) flipAngle = flipTarget;
       }
+      // JS-driven backface visibility for #card-text (Chrome backface-visibility bug workaround)
+      if (cardText) cardText.style.visibility = flipAngle > 90 ? '' : 'hidden';
 
       if (!isFullscreen) {
         // Normal: tilt + user zoom + card zoom animation + flip
@@ -1064,6 +1066,10 @@ flipBtn.addEventListener('click', () => {
   flipBtn.classList.toggle('active', isFlipped);
   // Stop audio when flipping back to front
   if (!isFlipped) stopAudio();
+  // Chrome 在 mix-blend-mode 参与 3D 场景时会无视 backface-visibility，
+  // 这里在翻到背面时直接让前面那层 effect 完全不参与渲染，
+  // 确保背面（含文字）不会受任何 mix-blend-mode 影响。
+  if (cardEffect) cardEffect.style.display = isFlipped ? 'none' : '';
   // Lazy-load back image on first flip (per-card)
   if (isFlipped && cardBack && !cardBack.src) {
     cardBack.src = `./files/card-back${CARD_ID}.webp?v=${_v}`;
@@ -1151,8 +1157,16 @@ checkFrame.addEventListener('change', () => {
 checkScene.addEventListener('change', () => {
   const v = checkScene.checked ? '' : 'hidden';
   card.style.visibility = v;
-  // hide card-effect (screen-blend layer) together with the scene
-  if (cardEffect) cardEffect.style.visibility = v;
+  // 和 scene 一起控制前景 effect 的显示；
+  // 背面文字层仍然独立于 mix-blend-mode。
+  if (cardEffect) {
+    if (!checkScene.checked) {
+      cardEffect.style.display = 'none';
+    } else if (!isFlipped) {
+      // 只在正面且 scene 打开的情况下恢复 effect
+      cardEffect.style.display = '';
+    }
+  }
 });
 
 // ========== Resize observers ==========

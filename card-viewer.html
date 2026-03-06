@@ -68,6 +68,13 @@
       --char-left-px:  calc(var(--card-w) * 0.32);
       --char-top-px:   calc(var(--card-h) * 0.20);
 
+      /* ── Card back audio player metrics (relative to card size) ── */
+      --back-audio-h:        calc(var(--card-h) * 0.09);   /* 高度约占卡片高度 9% */
+      --back-audio-radius:   calc(var(--card-w) * 0.05);   /* 圆角相对卡片宽度 */
+      --back-audio-pad-x:    calc(var(--card-w) * 0.06);   /* 左右内边距 */
+      --back-audio-gap:      calc(var(--card-w) * 0.06);   /* 按钮与波形间距 */
+      --back-audio-btn-size: calc(var(--card-w) * 0.12);   /* 播放按钮直径 */
+
       /* ── Chat bubble ↔ character gap (手机 default) ── */
       --bubble-gap:     48px;
       --bubble-top-off: 20px;
@@ -259,8 +266,7 @@
     #card-character,
     #card-character-canvas,
     #chat-bubble,
-    #card-back-wrap,
-    #card-text {
+    #card-back-wrap {
       backface-visibility: hidden;
       -webkit-backface-visibility: hidden;
     }
@@ -295,7 +301,6 @@
       height: auto;
       display: block;
       pointer-events: none;
-      mix-blend-mode: normal;
       transform: rotateY(180deg) translateZ(60px);
     }
 
@@ -305,21 +310,20 @@
       bottom: 6.5%;
       left: 12%;
       right: 10%;
-      height: 70px;
-      /* background: rgba(100, 108, 12, 0.88); */
-      border-radius: 18px;
+      height: var(--back-audio-h);
+      border-radius: var(--back-audio-radius);
       display: flex;
       align-items: center;
-      padding: 0 20px 0 20px;
-      gap: 30px;
+      padding: 0 var(--back-audio-pad-x);
+      gap: var(--back-audio-gap);
       overflow: hidden;
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
     }
 
     #back-audio-btn {
-      width: 48px;
-      height: 48px;
+      width: var(--back-audio-btn-size);
+      height: var(--back-audio-btn-size);
       border-radius: 50%;
       background: rgba(15, 15, 15, 0.92);
       border: none;
@@ -341,6 +345,8 @@
 
     #back-audio-btn svg {
       display: block;
+      width: 60%;
+      height: 60%;
     }
 
     #back-audio-waveform {
@@ -660,9 +666,6 @@
         <span id="bubble-text"></span>
       </div>
 
-      <!-- Layer 7: Card text — floats above back face in 3D (direct child of card-wrapper for preserve-3d) -->
-      <img id="card-text" alt="">
-
       <!-- Layer 6: Card back face (src set lazily on first flip) -->
       <div id="card-back-wrap">
         <img id="card-back" alt="">
@@ -678,6 +681,10 @@
           <div id="back-audio-waveform"></div>
         </div>
       </div>
+
+      <!-- Layer 7: Card text — must be AFTER card-back-wrap in DOM so it stays on top
+           when Chrome flattens preserve-3d due to mix-blend-mode: screen on card-effect -->
+      <img id="card-text" alt="" style="visibility:hidden">
 
     </div>
   </div>
