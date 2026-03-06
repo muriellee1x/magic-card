@@ -26,6 +26,9 @@ const sceneOverlay  = document.getElementById('scene-overlay');
 const sceneWrap     = document.getElementById('scene-wrap');
 const backBtn       = document.getElementById('back-btn');
 const gyroBtn       = document.getElementById('gyro-btn');
+const flipBtn       = document.getElementById('flip-btn');
+const cardBack      = document.getElementById('card-back');
+const cardText      = document.getElementById('card-text');
 const menuBtn       = document.getElementById('menu-btn');
 const layerMenu     = document.getElementById('layer-menu');
 const checkChar     = document.getElementById('check-char');
@@ -39,9 +42,9 @@ const sceneToast    = document.getElementById('scene-toast');
 const LOADING_LINES = [
   '魔法加载中…',
   '戳戳主播试试～',
-  '点击手机形状 icon 开启陀螺仪',
+  '点击右侧 icon 开启陀螺仪',
   '双击进入魔法世界！',
-  '点击 menu 控制显示内容',
+  '翻转卡片有惊喜！',
   '稍等一下，马上就好～',
 ];
 let _loadingLineIdx = 0;
@@ -289,7 +292,7 @@ const _scenePos = SCENE_SPLAT_POSITION[CARD_ID] || [0, 0.5, 0];
 // ── Per-card splat Z clipping [zMin, zMax] (local space, OpenCV: +Z = 远离相机) ──
 // 设为 null 表示不裁剪；只保留 zMin ≤ z ≤ zMax 范围内的 splat
 const CARD_SPLAT_CLIP = {
-  1: [0.75, null],
+  1: [0.1, null],
   2: [0.1, null],
   3: [0.1, null],
   4: [0.1, null],
@@ -428,6 +431,11 @@ let zoomFactor = 1.0, targetZoom = 1.0;
 let pinching = false, pinchStartDist = 0, pinchStartZoom = 1.0;
 // Animated scale for card enter/exit zoom effect
 let cardScale = 1.0;
+
+// ── Card flip state ──
+let isFlipped  = false;
+let flipAngle  = 0;    // current animated Y angle (degrees)
+let flipTarget = 0;    // target angle: 0 = front, 180 = back
 
 // ── Focal zoom (scene viewer only) ──
 let focalOffset = FOCAL_OFFSET_MM;
@@ -714,12 +722,19 @@ function tick() {
       const cardScaleTarget = isFullscreen ? CARD_ZOOM_ENTER : 1.0;
       cardScale += (cardScaleTarget - cardScale) * CARD_ZOOM_DAMP;
 
+      // Animate flip angle (fast damping for snappy flip feel)
+      if (flipAngle !== flipTarget) {
+        const diff = flipTarget - flipAngle;
+        flipAngle += diff * 0.22;
+        if (Math.abs(diff) < 0.4) flipAngle = flipTarget;
+      }
+
       if (!isFullscreen) {
-        // Normal: tilt + user zoom + card zoom animation
+        // Normal: tilt + user zoom + card zoom animation + flip
         const tiltY =  alpha * RAD_TO_DEG * CARD_TILT_AMP;
         const tiltX = -beta  * RAD_TO_DEG * CARD_TILT_AMP;
         cardWrapper.style.transform =
-          `rotateX(${tiltX}deg) rotateY(${tiltY}deg) scale(${zoomFactor * cardScale})`;
+          `rotateX(${tiltX}deg) rotateY(${tiltY + flipAngle}deg) scale(${zoomFactor * cardScale})`;
       } else {
         // Fullscreen: only drive the card zoom (no tilt, overlay is on top)
         cardWrapper.style.transform = `scale(${cardScale})`;
@@ -804,8 +819,15 @@ function attachInteraction(el, allowDoubleTap = false) {
     const dy = e.clientY - downY;
     const isTap = !pinching && Math.sqrt(dx * dx + dy * dy) < 8;
     ptrUp();
-    if (allowDoubleTap && isTap && !isFullscreen) {
-      if (isInCharacterRegion(e.clientX, e.clientY)) advanceBubble();
+    if (isTap) {
+      // Audio button tap: handle when card is showing its back
+      if (isFlipped && e.target && e.target.closest('#back-audio-btn')) {
+        toggleAudio();
+        return;
+      }
+      if (allowDoubleTap && !isFullscreen) {
+        if (isInCharacterRegion(e.clientX, e.clientY)) advanceBubble();
+      }
     }
   }, { capture: true });
 
@@ -851,7 +873,7 @@ function attachInteraction(el, allowDoubleTap = false) {
 
   // Double-tap (mobile) — only on card-wrapper, not scene overlay
   el.addEventListener('dblclick', e => {
-    if (!cardLoaded || isFullscreen) return;
+    if (!cardLoaded || isFullscreen || flipTarget === 180) return;
     e.stopPropagation();
     if (!sceneLoaded) { showSceneToast(); return; }
     enterFullscreen();
@@ -868,7 +890,7 @@ function attachInteraction(el, allowDoubleTap = false) {
     if (e.touches.length !== 0) return;
     if (hadMultiTouch) { hadMultiTouch = false; lastTapTime = 0; return; }
     hadMultiTouch = false;
-    if (!cardLoaded || isFullscreen) return;
+    if (!cardLoaded || isFullscreen || flipTarget === 180) return;
     const now = Date.now();
     if (now - lastTapTime < 300) {
       e.preventDefault(); e.stopPropagation();
@@ -945,6 +967,111 @@ function onGyro(e) {
   gyroDA = clamp(-(e.gamma - gyroGamma0) * Math.PI / 180 * GYRO_SENS, -MAX_ORBIT_H, MAX_ORBIT_H);
   gyroDB = clamp(-(e.beta  - gyroBeta0)  * Math.PI / 180 * GYRO_SENS, -MAX_ORBIT_V, MAX_ORBIT_V);
 }
+
+// ========== Card back audio player ==========
+
+const backAudioBtn      = document.getElementById('back-audio-btn');
+const backAudioPlayIcon = document.getElementById('back-audio-play-icon');
+const backAudioPauseIcon= document.getElementById('back-audio-pause-icon');
+const backAudioWaveform = document.getElementById('back-audio-waveform');
+
+// Per-card audio file paths
+const CARD_AUDIO = {
+  1: './files/audio/character1-voice.mp3',
+  2: './files/audio/character2-voice.mp3',
+  3: './files/audio/character3-voice.mp3',
+  4: './files/audio/character4-voice.mp3',
+};
+
+let _backAudio = null;
+let _audioPlaying = false;
+
+// Waveform bar heights as percentage (0–100) of available space
+const WAVEFORM_BAR_DATA = [
+  42, 55, 65, 72, 78, 85, 80, 88, 92, 85, 90, 95, 88, 92, 95, 90,
+  88, 95, 92, 88, 90, 95, 88, 92, 85, 90, 88, 82, 78, 72, 68, 62,
+  58, 52, 65, 58, 72, 62, 68, 55, 48, 42,
+];
+
+function initBackAudioPlayer() {
+  if (!backAudioWaveform) return;
+  backAudioWaveform.innerHTML = '';
+  WAVEFORM_BAR_DATA.forEach((pct, i) => {
+    const bar = document.createElement('div');
+    bar.className = 'waveform-bar';
+    bar.style.height = `${pct}%`;
+    const dur  = (0.45 + Math.random() * 0.5).toFixed(2);
+    const delay= (Math.random() * 0.4).toFixed(2);
+    bar.style.setProperty('--bar-dur',   `${dur}s`);
+    bar.style.setProperty('--bar-delay', `${delay}s`);
+    backAudioWaveform.appendChild(bar);
+  });
+}
+
+function getBackAudio() {
+  if (!_backAudio) {
+    _backAudio = new Audio(CARD_AUDIO[CARD_ID] || CARD_AUDIO[1]);
+    _backAudio.addEventListener('ended', () => {
+      _audioPlaying = false;
+      updateAudioUI();
+    });
+  }
+  return _backAudio;
+}
+
+function updateAudioUI() {
+  if (!backAudioPlayIcon || !backAudioPauseIcon) return;
+  if (_audioPlaying) {
+    backAudioPlayIcon.style.display  = 'none';
+    backAudioPauseIcon.style.display = '';
+    backAudioWaveform?.querySelectorAll('.waveform-bar').forEach(b => b.classList.add('playing'));
+  } else {
+    backAudioPlayIcon.style.display  = '';
+    backAudioPauseIcon.style.display = 'none';
+    backAudioWaveform?.querySelectorAll('.waveform-bar').forEach(b => b.classList.remove('playing'));
+  }
+}
+
+function toggleAudio() {
+  const audio = getBackAudio();
+  if (_audioPlaying) {
+    audio.pause();
+    _audioPlaying = false;
+  } else {
+    audio.play().catch(() => {});
+    _audioPlaying = true;
+  }
+  updateAudioUI();
+}
+
+// Stop audio when card is flipped back to front
+function stopAudio() {
+  if (_backAudio && _audioPlaying) {
+    _backAudio.pause();
+    _backAudio.currentTime = 0;
+    _audioPlaying = false;
+    updateAudioUI();
+  }
+}
+
+initBackAudioPlayer();
+
+// ========== Flip button ==========
+
+flipBtn.addEventListener('click', () => {
+  isFlipped = !isFlipped;
+  flipTarget = isFlipped ? 180 : 0;
+  flipBtn.classList.toggle('active', isFlipped);
+  // Stop audio when flipping back to front
+  if (!isFlipped) stopAudio();
+  // Lazy-load back image on first flip (per-card)
+  if (isFlipped && cardBack && !cardBack.src) {
+    cardBack.src = `./files/card-back${CARD_ID}.webp?v=${_v}`;
+  }
+  if (isFlipped && cardText && !cardText.src) {
+    cardText.src = `./files/card-text${CARD_ID}.webp?v=${_v}`;
+  }
+});
 
 // ========== Scene fullscreen mode ==========
 
